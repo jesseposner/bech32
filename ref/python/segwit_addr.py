@@ -43,7 +43,12 @@ def bech32_hrp_expand(hrp):
 
 def bech32_verify_checksum(hrp, data):
     """Verify a checksum given HRP and converted data characters."""
-    return bech32_polymod(bech32_hrp_expand(hrp) + data) == 1
+    return bech32_checksum_constant(hrp, data) == 1
+
+
+def bech32_checksum_constant(hrp, data):
+    """Internal function that computes the Bech32 checksum constant."""
+    return bech32_polymod(bech32_hrp_expand(hrp) + data)
 
 
 def bech32_create_checksum(hrp, data):
@@ -61,6 +66,16 @@ def bech32_encode(hrp, data):
 
 def bech32_decode(bech):
     """Validate a Bech32 string, and determine HRP and data."""
+    hrp, data = decode_string(bech)
+    if hrp is None or data is None:
+        return (None, None)
+    if not bech32_verify_checksum(hrp, data):
+        return (None, None)
+    return (hrp, data[:-6])
+
+
+def decode_string(bech):
+    """Internal function that decodes a Bech32 string."""
     if ((any(ord(x) < 33 or ord(x) > 126 for x in bech)) or
             (bech.lower() != bech and bech.upper() != bech)):
         return (None, None)
@@ -72,9 +87,7 @@ def bech32_decode(bech):
         return (None, None)
     hrp = bech[:pos]
     data = [CHARSET.find(x) for x in bech[pos+1:]]
-    if not bech32_verify_checksum(hrp, data):
-        return (None, None)
-    return (hrp, data[:-6])
+    return (hrp, data)
 
 
 def convertbits(data, frombits, tobits, pad=True):
@@ -100,19 +113,35 @@ def convertbits(data, frombits, tobits, pad=True):
     return ret
 
 
+def convert_decoded_bits(data):
+    """Internal function that converts bits from a decoded bech32m string."""
+    return convertbits(data[1:-6], 5, 8, False)
+
+
+def validate_witness_program(version, witprog):
+    """Internal function that validates a decoded witness program."""
+    if witprog is None or len(witprog) < 2 or len(witprog) > 40:
+        return False
+    if version > 16:
+        return False
+    if version == 0 and len(witprog) != 20 and len(witprog) != 32:
+        return False
+    return True
+
+
 def decode(hrp, addr):
-    """Decode a segwit address."""
-    hrpgot, data = bech32_decode(addr)
+    """Decode a segwit address (Bech32)."""
+    hrpgot, data = decode_string(addr)
     if hrpgot != hrp:
         return (None, None)
-    decoded = convertbits(data[1:], 5, 8, False)
-    if decoded is None or len(decoded) < 2 or len(decoded) > 40:
+    constant = bech32_checksum_constant(hrp, data)
+    if constant != 1:
         return (None, None)
-    if data[0] > 16:
+    version = data[0] if data else None
+    witprog = convert_decoded_bits(data)
+    if not validate_witness_program(version, witprog):
         return (None, None)
-    if data[0] == 0 and len(decoded) != 20 and len(decoded) != 32:
-        return (None, None)
-    return (data[0], decoded)
+    return (version, witprog)
 
 
 def encode(hrp, witver, witprog):
